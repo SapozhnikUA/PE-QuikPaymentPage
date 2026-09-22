@@ -6,6 +6,13 @@
     "mail_from": "",
     "site_url": "https://myDomain.kyiv.ua/pe/",
     "session_days": 30,
+    "timezone": "Europe/Kyiv",
+    "invoice": {
+        "title": "РАХУНОК НА ОПЛАТУ",
+        "number_start": 1,
+        "note": "",
+        "show_logo": true
+    },
     "payee": {
         "name": "ФОП Шевченко Тарас Олександрович",
         "iban": "UA553220000000000000000000000",

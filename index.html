@@ -174,6 +174,8 @@ body.android .bank-links{grid-template-columns:repeat(5,1fr)}
 .admin .btn{padding:10px 12px;font-size:13px}
 .admin p{font-size:12.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
 body.loading-link .qr-frame,body.loading-link .bank-links{opacity:.35;transition:opacity .2s}
+.btn.accent{border-color:transparent;color:#fff;background:linear-gradient(135deg,#4f46e5,#7c3aed 60%,#06b6d4);box-shadow:0 12px 24px -14px rgba(79,70,229,.9)}
+.btn.accent:hover{color:#fff;border-color:transparent;transform:translateY(-2px)}
 .btn.danger{color:#f87171;border-color:rgba(248,113,113,.4)}
 .btn.danger:hover{border-color:#f87171;color:#fca5a5}
 body.cfg-loading .wrap > section,body.cfg-loading .wrap > .profile{display:none}
@@ -274,6 +276,11 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       <div class="admin" id="admin-box" hidden>
         <div class="admin-head"><b>Режим адміністратора</b><span><button type="button" class="link-btn" id="keyBtn"></button> · <button type="button" class="link-btn" id="adminOff">вимкнути</button></span></div>
         <p id="admin-info"></p>
+        <div class="p-actions">
+          <button type="button" class="btn accent" id="invBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>Створити рахунок (PDF)</button>
+          <button type="button" class="btn narrow" id="invCsvBtn">Реєстр (CSV)</button>
+        </div>
         <div class="p-actions">
           <button type="button" class="btn" id="dlLinks">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>Завантажити links.json</button>
@@ -622,6 +629,21 @@ async function api(action, body, { auth = false, method = 'POST', timeout = 1000
     return { ok: res.ok, status: res.status, data };
   } finally { clearTimeout(tm); }
 }
+let INV = null;                                            // стан реєстру рахунків {count, next} — лише коли є ключ
+async function apiBlob(action, body){                       // відповідь-файл (PDF/CSV); помилки приходять як JSON
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const res = await fetch(siteUrl(SAVE_URL) + '?action=' + action, { method: 'POST', cache: 'no-store', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json', 'X-Key': getKey() }, body: JSON.stringify(body || {}) });
+    if (!res.ok || (res.headers.get('content-type') || '').includes('json')) return { ok: false, status: res.status, data: await res.json().catch(() => ({})) };
+    const m = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/);
+    return { ok: true, status: res.status, blob: await res.blob(), filename: m ? m[1] : '', number: res.headers.get('x-invoice-number') || '' };
+  } finally { clearTimeout(tm); }
+}
+function saveBlob(blob, name){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 async function saveRemote(st, code){                      // POST save.php?action=save → {ok, status, data}
   const r = await api('save', { sum: st.sum, purpose: st.purpose, code }, { auth: true });
   return { ok: r.ok && !!r.data.code, status: r.status, data: r.data };
@@ -925,6 +947,7 @@ function initPay(banks){
     if (!STORE.loaded) info = 'links.json не прочитано (відкрийте сторінку через сайт, а не як файл) — скорочення не створюються.';
     else {
       info = `У links.json: ${pub} · нових, ще не опублікованих: ${pen}. Автозбереження: ${hasKey ? 'увімкнено ✓' : (pwSet ? 'вимкнено — введіть пароль.' : 'вимкнено — пароль ще не задано.')}`;
+      if (hasKey && INV) info += ` Рахунків: ${INV.count} · наступний № ${INV.next}.`;
       if (!isDefaultState(st)){
         if (STORE.pub.has(k)) info += ` Поточний платіж: ?${STORE.pub.get(k)} — опубліковано ✓`;
         else if (STORE.pen.has(k)) info += ` Поточний платіж: ?${STORE.pen.get(k)} — ще не в links.json ⏳`;
@@ -970,9 +993,41 @@ function initPay(banks){
     if (!confirm(`Видалити ${n} нових скорочень, які ще не опубліковано в links.json?`)) return;
     STORE.pending = {}; savePending(); indexLinks(); renderAdmin();
   });
+  async function refreshInvoices(){                       // скільки рахунків уже є і який номер наступний
+    if (!getKey()){ INV = null; return renderAdmin(); }
+    try {
+      const r = await api('invoices', {}, { auth: true });
+      if (r.ok) INV = { count: r.data.count, next: r.data.next };
+      else { INV = null; if (r.status === 403) forgetKey(); }
+    } catch(e){ INV = null; }
+    renderAdmin();
+  }
+  $('invBtn').addEventListener('click', async () => {
+    const b = buildPay(sanitizeAmount(amountEl.value), purposeEl.value);
+    if (!b.amt){ toast('Введіть суму — без неї рахунок не створюється'); amountEl.focus(); return; }
+    if (!getKey()) return toast('Спершу введіть пароль (кнопка «ввести пароль» вгорі панелі)', 4500);
+    const btn = $('invBtn'); btn.disabled = true;
+    try {
+      const r = await apiBlob('invoice', { sum: b.amt.payload, purpose: b.purpose });
+      if (!r.ok){
+        if (r.status === 403){ forgetKey(); INV = null; renderAdmin(); }
+        return toast(r.data.error || 'Не вдалося створити рахунок', 6000);
+      }
+      saveBlob(r.blob, r.filename || `Rakhunok-${r.number}.pdf`);
+      toast(`Рахунок № ${r.number} створено й додано до реєстру`, 5000);
+      refreshInvoices();
+    } catch(e){ toast('Немає зв’язку зі save.php', 5000); }
+    finally { btn.disabled = false; }
+  });
+  $('invCsvBtn').addEventListener('click', async () => {
+    if (!getKey()) return toast('Спершу введіть пароль', 4000);
+    let r; try { r = await apiBlob('invoices_csv', {}); } catch(e){ return toast('Немає зв’язку зі save.php', 5000); }
+    if (!r.ok){ if (r.status === 403){ forgetKey(); INV = null; renderAdmin(); } return toast(r.data.error || 'Не вдалося завантажити реєстр', 5000); }
+    saveBlob(r.blob, r.filename || 'invoices.csv');
+  });
   $('keyBtn').addEventListener('click', async () => {
     if (getKey()){                                          // «забути ключ в браузері»: токен видаляємо і тут, і на сервері (пароль лишається чинним)
-      api('logout', {}, { auth: true }).catch(() => {}); forgetKey(); toast('Ключ забуто в цьому браузері'); return renderAdmin();
+      api('logout', {}, { auth: true }).catch(() => {}); forgetKey(); INV = null; toast('Ключ забуто в цьому браузері'); return renderAdmin();
     }
     let ok;
     if (!(CFG.data && CFG.data.password_set)){
@@ -985,6 +1040,7 @@ function initPay(banks){
         onSubmit: async pw => { const r = await api('login', { password: pw }); if (!r.ok) return r.data.error || 'Невірний пароль.'; setKey(r.data.token); return null; } });
     }
     renderAdmin(); if (!ok) return;
+    refreshInvoices();
     const n = await flushPending();
     toast(n ? `Автозбереження увімкнено. Опубліковано ${n} нових скорочень` : 'Автозбереження увімкнено ✓', 4000); syncUrl(); renderAdmin();
   });
@@ -1068,6 +1124,7 @@ function initPay(banks){
     if (ADMIN.on && getKey()){                            // ключ міг бути анульований (скидання через пошту) або прострочений
       const w = await api('whoami', {}, { auth: true }).catch(() => null);
       if (w && w.status === 403){ forgetKey(); toast('Ключ недійсний або анульований — введіть пароль знову', 5000); }
+      else if (w && w.ok) refreshInvoices();
     }
     apply();
     flushPending().then(n => { if (n){ toast(`Опубліковано ${n} нових скорочень зі списку очікування`, 4000); } syncUrl(); renderAdmin(); });
