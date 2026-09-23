@@ -4,8 +4,12 @@ declare(strict_types=1);
  * invoice.php — генератор PDF-рахунку без сторонніх бібліотек (A4, один аркуш).
  *
  * Шрифт Carlito (SIL Open Font License 1.1) — вбудована підмножина символів (кирилиця, латиниця, розділові знаки).
+ * QR для оплати — власний векторний QR-кодогенератор (qrcode.php), той самий формат НБУ (BCD/002),
+ * що й на самій сторінці, з призначенням, доповненим посиланням на номер і дату рахунку.
  * Викликається з save.php:  invoice_build_pdf($config, ['number'=>12, 'date'=>DateTimeImmutable, 'amount'=>'233.00', 'purpose'=>'…'])
  */
+
+require_once __DIR__ . '/qrcode.php';
 
 const INV_ASSETS = [
  'regular'=>[
@@ -91,6 +95,36 @@ function inv_date_uk(DateTimeInterface $d): string {
     return (int)$d->format('j') . ' ' . $m[(int)$d->format('n') - 1] . ' ' . $d->format('Y') . ' р.';
 }
 
+// ───────────────────────── платіжний QR (формат НБУ BCD/002, як на сторінці) ─────────────────────────
+function inv_cp1251(string $s): string {
+    $r = @iconv('UTF-8', 'CP1251//TRANSLIT//IGNORE', $s);
+    if ($r === false) $r = @mb_convert_encoding($s, 'CP1251', 'UTF-8');
+    return $r === false ? '' : $r;
+}
+function inv_base64url(string $bytes): string { return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '='); }
+function inv_qr_amount_payload(string $amount): string {
+    [$g, $k] = array_pad(explode('.', $amount, 2), 2, '00');
+    return $k === '00' ? (string)(int)$g : (string)(int)$g . '.' . $k;
+}
+/** Призначення для QR: те саме призначення + посилання на номер/дату рахунку, з урізанням до 140 символів (ліміт стандарту). */
+function inv_qr_purpose(string $purpose, int $number, DateTimeInterface $date): string {
+    $suffix = ', згідно рахунку № ' . $number . ' від ' . $date->format('d.m.Y');
+    $max = 140 - mb_strlen($suffix, 'UTF-8');
+    $base = trim($purpose);
+    if ($max <= 0) return mb_substr(trim($purpose . $suffix), 0, 140, 'UTF-8');
+    if (mb_strlen($base, 'UTF-8') > $max) $base = rtrim(mb_substr($base, 0, $max, 'UTF-8'));
+    return $base . $suffix;
+}
+function inv_qr_matrix(array $pay, string $amount, string $purpose): ?array {
+    $text = implode("\n", ['BCD', '002', '2', 'UCT', '', (string)($pay['name'] ?? ''), (string)($pay['iban'] ?? ''),
+        'UAH' . inv_qr_amount_payload($amount), (string)($pay['tax_id'] ?? ''), '', '', $purpose, '', '']);
+    $bytes = inv_cp1251($text);
+    if ($bytes === '') return null;
+    $url = 'https://bank.gov.ua/qr/' . inv_base64url($bytes);
+    try { [$mat, $size] = qr_encode($url, 15); } catch (Throwable $e) { return null; }
+    return [$mat, $size];
+}
+
 // ───────────────────────── мінімальний PDF-writer ─────────────────────────
 class InvPdf {
     const W = 595.28;
@@ -156,6 +190,21 @@ class InvPdf {
     }
     public function logo(float $x, float $y, float $size): void {
         if ($this->logo !== null) $this->ops[] = sprintf('q %.2F 0 0 %.2F %.2F %.2F cm /Im1 Do Q', $size, $size, $x, self::H - $y - $size);
+    }
+    /** Малює QR-матрицю (вектором, без растру) у квадраті [x,y,size] з тихою зоною ~3 модулі. */
+    public function qr(float $x, float $y, float $size, array $mat, int $n, array $rgb = [0.059, 0.090, 0.165]): void {
+        $quiet = 3; $cell = $size / ($n + 2 * $quiet); $yy = self::H - $y - $size;
+        $path = '';
+        for ($r = 0; $r < $n; $r++) {
+            $c = 0;
+            while ($c < $n) {
+                if (!$mat[$r][$c]) { $c++; continue; }
+                $s = $c; while ($c < $n && $mat[$r][$c]) $c++;
+                $rx = $x + ($quiet + $s) * $cell; $ry = $yy + $size - ($quiet + $r + 1) * $cell;
+                $path .= sprintf('%.3F %.3F %.3F %.3F re ', $rx, $ry, ($c - $s) * $cell, $cell);
+            }
+        }
+        if ($path !== '') $this->ops[] = sprintf('%.3F %.3F %.3F rg %sf', $rgb[0], $rgb[1], $rgb[2], $path);
     }
 
     private static function stream(string $dict, string $data, bool $flate = true): string {
@@ -286,11 +335,24 @@ function invoice_build_pdf(array $cfg, array $inv): string {
     $note = trim((string)($conf['note'] ?? ''));
     if ($note !== '') { foreach ($p->wrap($note, 'F1', 10, $cw) as $i => $ln) $p->text($M, $ey + 26 + $i * 13, $ln, 'F1', 10, $gray); $ey += 26 + (count($p->wrap($note, 'F1', 10, $cw)) - 1) * 13; }
 
+    // QR для оплати (той самий формат НБУ, що на сторінці; призначення доповнене номером/датою рахунку)
+    $qrPurpose = inv_qr_purpose((string)$inv['purpose'], $num, $inv['date']);
+    $qr = inv_qr_matrix($pay, $inv['amount'], $qrPurpose);
+    $qrSize = 100.0;                                       // ~35 мм — з запасом для впевненого сканування (65+ модулів)
+
     // підпис
-    $gy = $ey + 62;
+    $gy = $ey + ($qr ? 78 : 62);
+    $sigW = $qr ? $cw - $qrSize - 28 : $cw;
     $p->text($M, $gy, 'Виконавець', 'F1', 10.5, $gray);
-    $p->line($M + 70, $gy + 2, $M + 250, $gy + 2, $ink, 0.7);
+    $p->line($M + 70, $gy + 2, min($M + 250, $M + $sigW), $gy + 2, $ink, 0.7);
     $p->text($M + 70, $gy + 15, $name, 'F1', 9, $gray);
+    if ($qr) {
+        [$mat, $n] = $qr;
+        $qx = $W - $M - $qrSize; $qy = $gy - 48;
+        $p->rect($qx - 8, $qy - 8, $qrSize + 16, $qrSize + 34, $white, $rule, 0.8, 8);
+        $p->qr($qx, $qy, $qrSize, $mat, $n, $ink);
+        $p->text($qx - 8, $qy + $qrSize + 18, 'Скануйте для оплати', 'F1', 8, $gray, 'c', $qrSize + 16);
+    }
 
     $tz = $inv['date']->format('O'); $tzs = substr($tz, 0, 3) . "'" . substr($tz, 3, 2) . "'";
     return $p->output(['title' => 'Рахунок № ' . $num . ' від ' . $dateUk, 'author' => $name, 'created' => 'D:' . $inv['date']->format('YmdHis') . $tzs]);
