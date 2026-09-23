@@ -266,6 +266,8 @@ function invoice_build_pdf(array $cfg, array $inv): string {
     $ink = [0.059, 0.090, 0.165]; $gray = [0.392, 0.455, 0.545]; $acc = [0.310, 0.275, 0.898];
     $soft = [0.973, 0.980, 0.988]; $rule = [0.886, 0.910, 0.941]; $white = [1, 1, 1];
     $name = (string)($pay['name'] ?? ''); $dateUk = inv_date_uk($inv['date']); $num = (int)$inv['number'];
+    // призначення, що фактично йде в оплату (і в QR, і в текст рахунку) — з посиланням на номер і дату рахунку
+    $purpose = inv_qr_purpose((string)$inv['purpose'], $num, $inv['date']);
 
     // шапка
     $p->rect(0, 0, $W, 7, $acc);
@@ -291,7 +293,7 @@ function invoice_build_pdf(array $cfg, array $inv): string {
         ['МФО / код банку', [trim((string)($pay['mfo'] ?? '') . '  ·  ЄДРПОУ ' . (string)($pay['bank_edrpou'] ?? ''), ' ·')], 'F1'],
     ];
     $labelW = 118.0; $vx = $M + 16 + $labelW; $vw = $cw - 32 - $labelW; $lh = 14.5;
-    $rows[] = ['Призначення платежу', $p->wrap((string)$inv['purpose'], 'F1', 11, $vw), 'F1'];
+    $rows[] = ['Призначення платежу', $p->wrap($purpose, 'F1', 11, $vw), 'F1'];
     $rows = array_values(array_filter($rows, function ($r) { return trim(implode('', $r[1])) !== ''; }));
     $h = 44.0; foreach ($rows as $r) $h += count($r[1]) * $lh + 7;
     $cy = 200.0;
@@ -314,7 +316,7 @@ function invoice_build_pdf(array $cfg, array $inv): string {
     $p->text($xQty, $y + 17, 'К-сть', 'F2', 9.5, $white, 'c', $wQty);
     $p->text($xPrice, $y + 17, 'Ціна, грн', 'F2', 9.5, $white, 'r', $wPrice - 8);
     $p->text($xSum, $y + 17, 'Сума, грн', 'F2', 9.5, $white, 'r', $wSum - 8);
-    $lines = $p->wrap((string)$inv['purpose'], 'F1', 11, $wName - 12);
+    $lines = $p->wrap($purpose, 'F1', 11, $wName - 12);
     $rh = count($lines) * $lh + 18;
     $ty = $y + 26;
     $p->text($xNo, $ty + 20, '1', 'F1', 11, $ink, 'c', $wNo);
@@ -335,9 +337,8 @@ function invoice_build_pdf(array $cfg, array $inv): string {
     $note = trim((string)($conf['note'] ?? ''));
     if ($note !== '') { foreach ($p->wrap($note, 'F1', 10, $cw) as $i => $ln) $p->text($M, $ey + 26 + $i * 13, $ln, 'F1', 10, $gray); $ey += 26 + (count($p->wrap($note, 'F1', 10, $cw)) - 1) * 13; }
 
-    // QR для оплати (той самий формат НБУ, що на сторінці; призначення доповнене номером/датою рахунку)
-    $qrPurpose = inv_qr_purpose((string)$inv['purpose'], $num, $inv['date']);
-    $qr = inv_qr_matrix($pay, $inv['amount'], $qrPurpose);
+    // QR для оплати (той самий формат НБУ, що на сторінці; те саме призначення, що показане вище)
+    $qr = inv_qr_matrix($pay, $inv['amount'], $purpose);
     $qrSize = 100.0;                                       // ~35 мм — з запасом для впевненого сканування (65+ модулів)
 
     // підпис
