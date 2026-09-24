@@ -109,8 +109,11 @@ function inv_qr_amount_payload(string $amount): string {
 /** Призначення для QR: те саме призначення + посилання на номер/дату рахунку, з урізанням до 140 символів (ліміт стандарту). */
 function inv_qr_purpose(string $purpose, int $number, DateTimeInterface $date): string {
     $suffix = ', згідно рахунку № ' . $number . ' від ' . $date->format('d.m.Y');
-    $max = 140 - mb_strlen($suffix, 'UTF-8');
     $base = trim($purpose);
+    // ідемпотентність: якщо призначення вже закінчується цим самим суфіксом (наприклад, при повторному
+    // завантаженні рахунку з реєстру, де воно вже збережене з додатком) — не додаємо його вдруге
+    if (substr($base, -strlen($suffix)) === $suffix) return $base;
+    $max = 140 - mb_strlen($suffix, 'UTF-8');
     if ($max <= 0) return mb_substr(trim($purpose . $suffix), 0, 140, 'UTF-8');
     if (mb_strlen($base, 'UTF-8') > $max) $base = rtrim(mb_substr($base, 0, $max, 'UTF-8'));
     return $base . $suffix;
