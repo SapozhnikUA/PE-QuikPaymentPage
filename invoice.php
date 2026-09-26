@@ -288,14 +288,15 @@ function invoice_build_pdf(array $cfg, array $inv): string {
     $p->text($M, 172, '№ ' . $num . ' від ' . $dateUk, 'F2', 24, $ink);
 
     // реквізити для оплати
+    $labelW = 118.0; $vx = $M + 16 + $labelW; $vw = $cw - 32 - $labelW; $lh = 14.5;
     $rows = [
+        ['Платник', $p->wrap((string)($inv['payer'] ?? ''), 'F1', 11, $vw), 'F1'],
         ['Одержувач', [$name], 'F2'],
         ['РНОКПП', [(string)($pay['tax_id'] ?? '')], 'F1'],
         ['IBAN', [trim(chunk_split((string)($pay['iban'] ?? ''), 4, ' '))], 'F2'],
         ['Банк', [(string)($pay['bank'] ?? '')], 'F1'],
         ['МФО / код банку', [trim((string)($pay['mfo'] ?? '') . '  ·  ЄДРПОУ ' . (string)($pay['bank_edrpou'] ?? ''), ' ·')], 'F1'],
     ];
-    $labelW = 118.0; $vx = $M + 16 + $labelW; $vw = $cw - 32 - $labelW; $lh = 14.5;
     $rows[] = ['Призначення платежу', $p->wrap($purpose, 'F1', 11, $vw), 'F1'];
     $rows = array_values(array_filter($rows, function ($r) { return trim(implode('', $r[1])) !== ''; }));
     $h = 44.0; foreach ($rows as $r) $h += count($r[1]) * $lh + 7;

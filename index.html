@@ -282,6 +282,9 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       <div class="admin" id="admin-box" hidden>
         <div class="admin-head"><b>Режим адміністратора</b><span><button type="button" class="link-btn" id="keyBtn"></button> · <button type="button" class="link-btn" id="adminOff">вимкнути</button></span></div>
         <p id="admin-info"></p>
+        <div class="field"><label for="inv-payer">Платник <span class="opt">(необов'язково)</span></label>
+          <div class="input"><input id="inv-payer" type="text" autocomplete="off" maxlength="140" placeholder="Наприклад: ФОП Іванов І.І." role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="payer-list">
+            <ul class="suggest" id="payer-list" role="listbox" aria-label="Платники" hidden></ul></div></div>
         <div class="field"><label for="inv-note">Примітка <span class="opt">(для внутрішнього використання, у рахунок не потрапляє)</span></label>
           <div class="input"><input id="inv-note" type="text" autocomplete="off" maxlength="300" placeholder="Наприклад: клієнт, номер договору…"></div></div>
         <div class="p-actions">
@@ -1045,7 +1048,7 @@ function initPay(banks){
     if (!getKey()){ INV = null; renderInvoiceSelect(); return renderAdmin(); }
     try {
       const r = await api('invoices', {}, { auth: true });
-      if (r.ok) INV = { count: r.data.count, next: r.data.next, recentDays: r.data.recentDays, recent: r.data.recent };
+      if (r.ok) INV = { count: r.data.count, next: r.data.next, recentDays: r.data.recentDays, recent: r.data.recent, payers: r.data.payers };
       else { INV = null; if (r.status === 403) forgetKey(); }
     } catch(e){ INV = null; }
     renderInvoiceSelect(); renderAdmin();
@@ -1056,7 +1059,7 @@ function initPay(banks){
     if (!getKey()) return toast('Спершу введіть пароль (кнопка «ввести пароль» вгорі панелі)', 4500);
     const btn = $('invBtn'); btn.disabled = true;
     try {
-      const r = await apiBlob('invoice', { sum: b.amt.payload, purpose: b.purpose, note: $('inv-note').value });
+      const r = await apiBlob('invoice', { sum: b.amt.payload, purpose: b.purpose, note: $('inv-note').value, payer: $('inv-payer').value });
       if (!r.ok){
         if (r.status === 403){ forgetKey(); INV = null; renderAdmin(); }
         return toast(r.data.error || 'Не вдалося створити рахунок', 6000);
@@ -1111,55 +1114,59 @@ function initPay(banks){
   });
   $('adminOff').addEventListener('click', () => { ADMIN.on = false; try { localStorage.removeItem(LS_ADMIN); } catch(e){} renderAdmin(); });
 
-  // ----- Підказки з шаблонів (links.json → "templates") для поля «Призначення» -----
-  const sList = $('purpose-list'); let sItems = [], sActive = -1;
+  // ----- Підказки (з шаблонів/реєстру) для полів «Призначення» та «Платник» -----
   const nq = s => String(s).toLowerCase().replace(/[’ʼ`]/g, "'");
-  function suggestCompute(mode){
-    const all = allTemplates(), q = nq(purposeEl.value.trim());
-    if (!q || (mode === 'focus' && all.some(t => nq(t) === q))) return all.slice(0, 8);
-    const tokens = q.split(/\s+/);
-    return all.filter(t => { const n = nq(t); return n !== q && tokens.every(k => n.includes(k)); })
-      .sort((a, b) => (nq(b).startsWith(q) - nq(a).startsWith(q)) || (nq(a).indexOf(tokens[0]) - nq(b).indexOf(tokens[0])) || (a.length - b.length))
-      .slice(0, 6);
-  }
-  function suggestClose(){ sList.hidden = true; sActive = -1; purposeEl.setAttribute('aria-expanded', 'false'); purposeEl.removeAttribute('aria-activedescendant'); }
-  function suggestPick(text){
-    purposeEl.value = text; suggestClose();
-    purposeEl.dispatchEvent(new Event('input', { bubbles: true })); purposeEl.focus();
-    try { purposeEl.setSelectionRange(text.length, text.length); } catch(e){}
-  }
-  function suggestMark(){
-    [...sList.children].forEach((li, i) => li.setAttribute('aria-selected', String(i === sActive)));
-    if (sActive >= 0){ purposeEl.setAttribute('aria-activedescendant', 'opt-' + sActive); sList.children[sActive].scrollIntoView({ block: 'nearest' }); }
-    else purposeEl.removeAttribute('aria-activedescendant');
-  }
-  function suggestOpen(mode){
-    sItems = suggestCompute(mode); sActive = -1;
-    if (!sItems.length) return suggestClose();
-    const q = nq(purposeEl.value.trim()), first = q.split(/\s+/)[0];
-    sList.textContent = '';
-    sItems.forEach((text, i) => {
-      const li = document.createElement('li'); li.id = 'opt-' + i; li.setAttribute('role', 'option'); li.setAttribute('aria-selected', 'false');
-      const at = first ? nq(text).indexOf(first) : -1;
-      if (at >= 0){ const m = document.createElement('mark'); m.textContent = text.slice(at, at + first.length);
-        li.append(text.slice(0, at), m, text.slice(at + first.length)); } else li.textContent = text;
-      li.addEventListener('click', () => suggestPick(text));
-      sList.appendChild(li);
+  function makeSuggest(inputEl, listEl, getCandidates){
+    let items = [], active = -1;
+    function compute(mode){
+      const all = getCandidates(), q = nq(inputEl.value.trim());
+      if (!q || (mode === 'focus' && all.some(t => nq(t) === q))) return all.slice(0, 8);
+      const tokens = q.split(/\s+/);
+      return all.filter(t => { const n = nq(t); return n !== q && tokens.every(k => n.includes(k)); })
+        .sort((a, b) => (nq(b).startsWith(q) - nq(a).startsWith(q)) || (nq(a).indexOf(tokens[0]) - nq(b).indexOf(tokens[0])) || (a.length - b.length))
+        .slice(0, 6);
+    }
+    function close(){ listEl.hidden = true; active = -1; inputEl.setAttribute('aria-expanded', 'false'); inputEl.removeAttribute('aria-activedescendant'); }
+    function pick(text){
+      inputEl.value = text; close();
+      inputEl.dispatchEvent(new Event('input', { bubbles: true })); inputEl.focus();
+      try { inputEl.setSelectionRange(text.length, text.length); } catch(e){}
+    }
+    function mark(){
+      [...listEl.children].forEach((li, i) => li.setAttribute('aria-selected', String(i === active)));
+      if (active >= 0){ inputEl.setAttribute('aria-activedescendant', listEl.id + '-opt-' + active); listEl.children[active].scrollIntoView({ block: 'nearest' }); }
+      else inputEl.removeAttribute('aria-activedescendant');
+    }
+    function open(mode){
+      items = compute(mode); active = -1;
+      if (!items.length) return close();
+      const q = nq(inputEl.value.trim()), first = q.split(/\s+/)[0];
+      listEl.textContent = '';
+      items.forEach((text, i) => {
+        const li = document.createElement('li'); li.id = listEl.id + '-opt-' + i; li.setAttribute('role', 'option'); li.setAttribute('aria-selected', 'false');
+        const at = first ? nq(text).indexOf(first) : -1;
+        if (at >= 0){ const m = document.createElement('mark'); m.textContent = text.slice(at, at + first.length);
+          li.append(text.slice(0, at), m, text.slice(at + first.length)); } else li.textContent = text;
+        li.addEventListener('click', () => pick(text));
+        listEl.appendChild(li);
+      });
+      listEl.hidden = false; inputEl.setAttribute('aria-expanded', 'true');
+    }
+    inputEl.addEventListener('input', () => open('input'));
+    inputEl.addEventListener('focus', () => open('focus'));
+    inputEl.addEventListener('blur', () => setTimeout(close, 120));
+    inputEl.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+        e.preventDefault();
+        if (listEl.hidden){ open('focus'); return; }
+        active = e.key === 'ArrowDown' ? (active + 1) % items.length : (active <= 0 ? items.length - 1 : active - 1); mark();
+      } else if (e.key === 'Enter' && !listEl.hidden && active >= 0){ e.preventDefault(); pick(items[active]); }
+      else if (e.key === 'Escape') close();
     });
-    sList.hidden = false; purposeEl.setAttribute('aria-expanded', 'true');
+    listEl.addEventListener('mousedown', e => e.preventDefault());       // клік по підказці не забирає фокус із поля
   }
-  purposeEl.addEventListener('input', () => suggestOpen('input'));
-  purposeEl.addEventListener('focus', () => suggestOpen('focus'));
-  purposeEl.addEventListener('blur', () => setTimeout(suggestClose, 120));
-  purposeEl.addEventListener('keydown', e => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
-      e.preventDefault();
-      if (sList.hidden){ suggestOpen('focus'); return; }
-      sActive = e.key === 'ArrowDown' ? (sActive + 1) % sItems.length : (sActive <= 0 ? sItems.length - 1 : sActive - 1); suggestMark();
-    } else if (e.key === 'Enter' && !sList.hidden && sActive >= 0){ e.preventDefault(); suggestPick(sItems[sActive]); }
-    else if (e.key === 'Escape') suggestClose();
-  });
-  sList.addEventListener('mousedown', e => e.preventDefault());       // клік по підказці не забирає фокус із поля
+  makeSuggest(purposeEl, $('purpose-list'), allTemplates);
+  makeSuggest($('inv-payer'), $('payer-list'), () => (INV && INV.payers) || []);
   $('resetPay').addEventListener('click', () => { amountEl.value = ''; purposeEl.value = DEFAULT_PURPOSE; apply(); });
 
   // Параметри з посилання:  ?k7f3q (скорочення з links.json)  або  ?sum=1500&p=…  (повна форма, працює завжди)

@@ -23,10 +23,12 @@ declare(strict_types=1);
 const CONFIG_FILE        = __DIR__ . '/config.php';
 const DATA_FILE          = __DIR__ . '/links.json';
 const INVOICES_FILE      = __DIR__ . '/invoices.csv.php';   // реєстр рахунків; перший рядок ховає файл від браузера
-const INVOICE_HEADER     = ['Дата генерації', 'Номер рахунку', 'Дата рахунку', 'Сума', 'Призначення', 'Примітка'];
+const INVOICE_HEADER     = ['Дата генерації', 'Номер рахунку', 'Дата рахунку', 'Сума', 'Призначення', 'Примітка', 'Платник'];
 const INVOICE_RECENT_DAYS = 30;    // «останні рахунки» у випадному списку — за скільки днів показувати
 const INVOICE_RECENT_MAX  = 300;   // запобіжник розміру відповіді, якщо рахунків за ці 30 днів дуже багато
 const NOTE_MAX_LEN        = 300;
+const PAYER_MAX_LEN       = 140;   // як і призначення — стільки вміщується в один рядок реквізитів PDF без переносу проблем
+const PAYERS_SUGGEST_MAX  = 200;   // скільки останніх унікальних платників пропонувати для автопідстановки
 const CONFIG_GUARD       = "<?php http_response_code(404); exit; ?>\n";   // перший рядок config.php: у браузері файл «порожній»
 const MAX_LINKS          = 5000;
 const CODE_LEN           = 6;
@@ -309,6 +311,11 @@ function normalize_note(string $s): string {
     $s = trim((string)preg_replace('/\s+/u', ' ', (string)$s));
     return mb_substr($s, 0, NOTE_MAX_LEN, 'UTF-8');
 }
+function normalize_payer(string $s): string {
+    $s = preg_replace('/[\x00-\x1F\x7F\x{2028}\x{2029}]+/u', ' ', $s);
+    $s = trim((string)preg_replace('/\s+/u', ' ', (string)$s));
+    return mb_substr($s, 0, PAYER_MAX_LEN, 'UTF-8');
+}
 function gen_code(array $links): string {
     for ($i = 0; $i < 50; $i++) {
         $s = '';
@@ -376,7 +383,7 @@ function registry_rows(string $raw): array {
         if (trim($line) === '') continue;
         $f = str_getcsv($line, ';', '"', '');
         if (count($f) < 5 || !ctype_digit(trim((string)$f[1]))) continue;      // заголовок і сміття пропускаємо
-        $rows[] = ['generated' => (string)$f[0], 'number' => (int)$f[1], 'date' => (string)$f[2], 'amount' => (string)$f[3], 'purpose' => (string)$f[4], 'note' => isset($f[5]) ? (string)$f[5] : ''];
+        $rows[] = ['generated' => (string)$f[0], 'number' => (int)$f[1], 'date' => (string)$f[2], 'amount' => (string)$f[3], 'purpose' => (string)$f[4], 'note' => isset($f[5]) ? (string)$f[5] : '', 'payer' => isset($f[6]) ? (string)$f[6] : ''];
     }
     return $rows;
 }
@@ -408,6 +415,7 @@ function action_invoice(): void {
     $purpose = normalize_purpose($rawPurpose);
     if ($purpose === '') fail(400, 'Порожнє призначення');
     $note = normalize_note((string)($in['note'] ?? ''));
+    $payer = normalize_payer((string)($in['payer'] ?? ''));
     if (!is_file(__DIR__ . '/invoice.php')) fail(500, 'Не знайдено invoice.php поруч зі save.php');
     require_once __DIR__ . '/invoice.php';
     $now = new DateTimeImmutable('now', cfg_timezone($cfg));
@@ -418,22 +426,25 @@ function action_invoice(): void {
     $raw = (string)stream_get_contents($fh);
     $number = registry_next(registry_rows($raw), $cfg);
     try {                                                   // спершу PDF: якщо він не вдався — номер не «витрачається»
-        $pdf = invoice_build_pdf($cfg, ['number' => $number, 'date' => $now, 'amount' => $amount, 'purpose' => $purpose]);
+        $pdf = invoice_build_pdf($cfg, ['number' => $number, 'date' => $now, 'amount' => $amount, 'purpose' => $purpose, 'payer' => $payer]);
     } catch (Throwable $e) {
         flock($fh, LOCK_UN); fclose($fh); fail(500, 'Не вдалося створити PDF: ' . $e->getMessage());
     }
     $purposeFull = inv_qr_purpose($purpose, $number, $now);   // те саме призначення, що показане в PDF і закодоване в QR
-    $line = csv_line([$now->format('Y-m-d H:i:s'), (string)$number, $now->format('Y-m-d'), $amount, $purposeFull, $note]) . "\n";
+    $line = csv_line([$now->format('Y-m-d H:i:s'), (string)$number, $now->format('Y-m-d'), $amount, $purposeFull, $note, $payer]) . "\n";
     if (trim($raw) === '') { rewind($fh); ftruncate($fh, 0); $ok = fwrite($fh, CONFIG_GUARD . csv_line(INVOICE_HEADER) . "\n" . $line) !== false; }
     else {
-        // якщо файл лишився від версії без колонки «Примітка» — оновлюємо лише рядок заголовка, самі дані не чіпаємо
+        // якщо файл лишився від версії без колонки «Примітка» і/або «Платник» — оновлюємо лише рядок заголовка, самі дані не чіпаємо
         $bodyStart = strpos($raw, '?>'); $bodyStart = $bodyStart === false ? 0 : $bodyStart + 2;
         if (substr($raw, $bodyStart, 2) === "\r\n") $bodyStart += 2;           // guard-рядок закінчується власним переносом — пропускаємо його
         elseif (($raw[$bodyStart] ?? '') === "\n") $bodyStart += 1;
         $headerEnd = strpos($raw, "\n", $bodyStart);
         $firstLine = rtrim($headerEnd === false ? substr($raw, $bodyStart) : substr($raw, $bodyStart, $headerEnd - $bodyStart), "\r");
-        $oldHeader = csv_line(['Дата генерації', 'Номер рахунку', 'Дата рахунку', 'Сума', 'Призначення']);
-        if ($firstLine === $oldHeader && $headerEnd !== false) {
+        $oldHeaders = [
+            csv_line(['Дата генерації', 'Номер рахунку', 'Дата рахунку', 'Сума', 'Призначення']),
+            csv_line(['Дата генерації', 'Номер рахунку', 'Дата рахунку', 'Сума', 'Призначення', 'Примітка']),
+        ];
+        if (in_array($firstLine, $oldHeaders, true) && $headerEnd !== false) {
             $guard = $bodyStart > 0 ? substr($raw, 0, $bodyStart) : CONFIG_GUARD;
             $rest = substr($raw, $headerEnd + 1);
             rewind($fh); ftruncate($fh, 0);
@@ -459,14 +470,17 @@ function action_invoices(): void {
     $cfg = cfg_read(); require_auth($cfg);
     $rows = registry_rows(registry_read());
     $since = (new DateTimeImmutable('now', cfg_timezone($cfg)))->modify('-' . INVOICE_RECENT_DAYS . ' days');
-    $recent = [];
+    $recent = []; $payers = []; $seenPayers = [];
     foreach (array_reverse($rows) as $r) {                      // найновіші перші
+        if ($r['payer'] !== '' && !isset($seenPayers[$r['payer']])) {   // унікальні платники з усього реєстру, не лише за 30 днів
+            $seenPayers[$r['payer']] = true;
+            if (count($payers) < PAYERS_SUGGEST_MAX) $payers[] = $r['payer'];
+        }
         $gen = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $r['generated'], cfg_timezone($cfg));
         if ($gen !== false && $gen < $since) continue;
-        $recent[] = ['number' => $r['number'], 'date' => $r['date'], 'amount' => $r['amount'], 'purpose' => $r['purpose'], 'note' => $r['note']];
-        if (count($recent) >= INVOICE_RECENT_MAX) break;
+        if (count($recent) < INVOICE_RECENT_MAX) $recent[] = ['number' => $r['number'], 'date' => $r['date'], 'amount' => $r['amount'], 'purpose' => $r['purpose'], 'note' => $r['note'], 'payer' => $r['payer']];
     }
-    respond_json(200, ['count' => count($rows), 'next' => registry_next($rows, $cfg), 'recentDays' => INVOICE_RECENT_DAYS, 'recent' => $recent]);
+    respond_json(200, ['count' => count($rows), 'next' => registry_next($rows, $cfg), 'recentDays' => INVOICE_RECENT_DAYS, 'recent' => $recent, 'payers' => $payers]);
 }
 
 function action_invoice_get(): void {
@@ -482,7 +496,7 @@ function action_invoice_get(): void {
     if (!is_file(__DIR__ . '/invoice.php')) fail(500, 'Не знайдено invoice.php поруч зі save.php');
     require_once __DIR__ . '/invoice.php';
     try {
-        $pdf = invoice_build_pdf($cfg, ['number' => $number, 'date' => $gen, 'amount' => $found['amount'], 'purpose' => $found['purpose']]);
+        $pdf = invoice_build_pdf($cfg, ['number' => $number, 'date' => $gen, 'amount' => $found['amount'], 'purpose' => $found['purpose'], 'payer' => $found['payer']]);
     } catch (Throwable $e) {
         fail(500, 'Не вдалося відтворити PDF: ' . $e->getMessage());
     }
@@ -499,7 +513,7 @@ function action_invoice_get(): void {
 function action_invoices_csv(): void {
     $cfg = cfg_read(); require_auth($cfg);
     $out = "\xEF\xBB\xBF" . csv_line(INVOICE_HEADER) . "\r\n";                   // BOM — щоб Excel правильно читав кирилицю
-    foreach (registry_rows(registry_read()) as $r) $out .= csv_line([$r['generated'], (string)$r['number'], $r['date'], $r['amount'], $r['purpose'], $r['note']]) . "\r\n";
+    foreach (registry_rows(registry_read()) as $r) $out .= csv_line([$r['generated'], (string)$r['number'], $r['date'], $r['amount'], $r['purpose'], $r['note'], $r['payer']]) . "\r\n";
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="invoices.csv"');
     header('Cache-Control: no-store');
