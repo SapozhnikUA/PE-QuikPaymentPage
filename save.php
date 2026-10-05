@@ -15,6 +15,7 @@ declare(strict_types=1);
  *   POST ?action=invoices        стан реєстру рахунків: кількість, наступний номер, рахунки за останні 30 днів (потрібен ключ)
  *   POST ?action=invoice_get     повторно завантажити вже згенерований PDF-рахунок {number} з реєстру (потрібен ключ)
  *   POST ?action=invoices_csv    завантажити реєстр рахунків як CSV (потрібен ключ)
+ *   POST ?action=visibility      {show_phone?, show_email?} → зберегти в config.php, чи показувати ці поля у звичайному режимі (потрібен ключ)
  *
  * Дані та секрети — у config.php (див. його). Вимоги: PHP 7.4+, права запису на config.php і links.json,
  * працююча функція mail() для листа «Анулювати ключ».
@@ -119,6 +120,24 @@ function public_config(array $c): array {                 // що бачить �
         'password_set'    => (string)($c['password_hash'] ?? '') !== '',
     ];
 }
+function action_set_visibility(): void {
+    $cfg = cfg_read(); require_auth($cfg);
+    $in = input_json();
+    $allowed = ['show_phone', 'show_email'];
+    $updates = [];
+    foreach ($allowed as $k) if (array_key_exists($k, $in)) $updates[$k] = (bool)$in[$k];
+    if (!$updates) fail(400, 'Немає що зберігати — очікується show_phone і/або show_email');
+    $saved = [];
+    cfg_update(function (array $cfg) use ($updates, &$saved) {
+        $payee = is_array($cfg['payee'] ?? null) ? $cfg['payee'] : [];
+        foreach ($updates as $k => $v) $payee[$k] = $v;
+        $cfg['payee'] = $payee;
+        $saved = $payee;
+        return $cfg;
+    });
+    respond_json(200, ['ok' => true, 'show_phone' => $saved['show_phone'] ?? true, 'show_email' => $saved['show_email'] ?? true]);
+}
+
 function admin_email(array $c): string {
     foreach ([$c['admin_email'] ?? '', is_array($c['payee'] ?? null) ? ($c['payee']['email'] ?? '') : ''] as $e)
         if (is_string($e) && filter_var($e, FILTER_VALIDATE_EMAIL)) return $e;
@@ -536,6 +555,7 @@ $routes = [
     'invoices'      => ['POST', 'action_invoices'],
     'invoice_get'   => ['POST', 'action_invoice_get'],
     'invoices_csv'  => ['POST', 'action_invoices_csv'],
+    'visibility'    => ['POST', 'action_set_visibility'],
 ];
 if ($action === 'reset') {
     if ($method === 'GET')  action_reset_page();

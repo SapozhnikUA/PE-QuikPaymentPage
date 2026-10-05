@@ -21,7 +21,9 @@
         "mfo": "322001",
         "bank_edrpou": "21133352",
         "phone": "+38 (050) 123-45-67",
-        "email": "myEmail@gmail.com"
+        "email": "myEmail@gmail.com",
+        "show_phone": true,
+        "show_email": true
     },
     "default_purpose": "Оплата за інформаційні послуги",
     "profile": {

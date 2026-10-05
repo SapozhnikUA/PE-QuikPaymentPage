@@ -151,6 +151,10 @@ body.android .bank-links{grid-template-columns:repeat(5,1fr)}
 .input .suffix{position:absolute;right:14px;top:50%;transform:translateY(-50%);color:var(--muted);font-weight:700;pointer-events:none}
 .p-grid{display:grid;grid-template-columns:170px 1fr;gap:0 12px}
 .opt{font-weight:400;opacity:.8}
+.vis-toggle{margin-left:8px}
+.vis-label{display:inline-flex;align-items:center;gap:4px;font-weight:500;font-size:12px;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0}
+.vis-label input{accent-color:var(--accent);width:13px;height:13px;cursor:pointer;margin:0}
+.vis-label:hover{color:var(--text)}
 .warn{font-size:12.5px;line-height:1.4;color:#f59e0b;margin:-2px 0 10px}
 .params{margin-bottom:18px}
 .p-actions{display:flex;gap:10px;margin:2px 0 4px}
@@ -370,11 +374,11 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       <div class="input"><input id="bank-code" class="mono" type="text" value="" readonly>
         <button class="copy-button" data-copy-id="bank-code" aria-label="Копіювати"></button></div></div>
 
-    <div class="field"><label for="phone">Тел.:</label>
+    <div class="field"><label for="phone">Тел.: <span class="vis-toggle" id="phone-vis-wrap" hidden><label class="vis-label"><input type="checkbox" id="show-phone"> Відображати</label></span></label>
       <div class="input"><input id="phone" type="text" value="" readonly>
         <button class="copy-button" data-copy-id="phone" aria-label="Копіювати"></button></div></div>
 
-    <div class="field"><label for="email">E-mail:</label>
+    <div class="field"><label for="email">E-mail: <span class="vis-toggle" id="email-vis-wrap" hidden><label class="vis-label"><input type="checkbox" id="show-email"> Відображати</label></span></label>
       <div class="input"><input id="email" type="text" value="" readonly>
         <button class="copy-button" data-copy-id="email" aria-label="Копіювати"></button></div></div>
 
@@ -683,13 +687,40 @@ function applyConfig(d){
   if (pg.title) document.title = pg.title;
   const md = document.querySelector('meta[name=description]'); if (md && pg.description) md.content = pg.description;
   $('purpose').value = DEFAULT_PURPOSE; $('purpose').placeholder = DEFAULT_PURPOSE;
+  applyContactVisibility();
+}
+// ---- «Тел.» і «E-mail»: показ у звичайному режимі керується чекбоксами в адмін-панелі ----
+function applyContactVisibility(){
+  if (!CFG.data) return;
+  const $ = id => document.getElementById(id), p = CFG.data.payee || {};
+  const showPhone = p.show_phone !== false, showEmail = p.show_email !== false;   // немає ключа в config.php → вважаємо «показувати»
+  const phoneField = $('phone').closest('.field'), emailField = $('email').closest('.field');
+  if (phoneField) phoneField.hidden = !showPhone && !ADMIN.on;
+  if (emailField) emailField.hidden = !showEmail && !ADMIN.on;
+  const cp = $('show-phone'), ce = $('show-email');
+  if (cp){ cp.checked = showPhone; $('phone-vis-wrap').hidden = !ADMIN.on; }
+  if (ce){ ce.checked = showEmail; $('email-vis-wrap').hidden = !ADMIN.on; }
+}
+async function toggleContactVisibility(key, checkboxEl){
+  if (!getKey()){ checkboxEl.checked = !checkboxEl.checked; toast('Спершу введіть пароль', 4000); return; }
+  const value = checkboxEl.checked;
+  let r; try { r = await api('visibility', { [key]: value }, { auth: true }); } catch(e){ checkboxEl.checked = !value; return toast('Немає зв’язку зі save.php', 5000); }
+  if (!r.ok){
+    checkboxEl.checked = !value;
+    if (r.status === 403){ forgetKey(); renderAdmin(); }
+    return toast(r.data.error || 'Не вдалося зберегти', 5000);
+  }
+  CFG.data.payee[key] = value;
+  applyContactVisibility();
+  toast(value ? 'Поле видно у звичайному режимі' : 'Поле приховано у звичайному режимі', 2500);
 }
 function buildVcard(){
   const p = CFG.data.payee, val = id => document.getElementById(id).value;
   const [last = '', first = '', ...rest] = String(p.name).replace(/^ФОП\s+/i, '').split(/\s+/).filter(Boolean);
-  const tel = String(p.phone || '').replace(/[^\d+]/g, '');
+  const tel = p.show_phone !== false ? String(p.phone || '').replace(/[^\d+]/g, '') : '';
+  const mail = p.show_email !== false ? (p.email || '') : '';
   return ['BEGIN:VCARD', 'VERSION:3.0', `N:${last};${first};${rest.join(' ')};;`, `FN:${p.name}`,
-    tel ? `TEL;TYPE=CELL:${tel}` : '', p.email ? `EMAIL:${p.email}` : '',
+    tel ? `TEL;TYPE=CELL:${tel}` : '', mail ? `EMAIL:${mail}` : '',
     'NOTE:РНОКПП ' + val('tax-id') + '\\nIBAN ' + val('iban') + '\\nБанк ' + val('bank') + '\\nМФО ' + val('mfo') + '\\nЄДРПОУ банку ' + val('bank-code'),
     'END:VCARD'].filter(Boolean).join('\r\n');
 }
@@ -861,6 +892,7 @@ function initCopy(){
 // ---------- Дані для експорту ----------
 const val = id => document.getElementById(id).value;
 function fullText(){
+  const p = (CFG.data && CFG.data.payee) || {};
   return ['РЕКВІЗИТИ','',
     'Отримувач: '+val('account-id'),
     'IBAN: '+val('iban'),
@@ -870,8 +902,8 @@ function fullText(){
     'Банк: '+val('bank'),
     'МФО: '+val('mfo'),
     'Код банку ЄДРПОУ: '+val('bank-code'),
-    'Тел.: '+val('phone'),
-    'E-mail: '+val('email'),
+    ...(p.show_phone !== false ? ['Тел.: '+val('phone')] : []),
+    ...(p.show_email !== false ? ['E-mail: '+val('email')] : []),
     '','Посилання для оплати: '+payUrl()].join('\n');
 }
 function download(name, mime, content){
@@ -940,6 +972,7 @@ function initPay(banks){
     try { history.replaceState(null, '', url); } catch(e){}
   }
   function renderAdmin(){
+    applyContactVisibility();
     const box = $('admin-box'); box.hidden = !ADMIN.on; if (!ADMIN.on) return;
     const pub = Object.keys(STORE.links).length, pen = Object.keys(STORE.pending).length, st = curState(), k = keyOf(st);
     const pwSet = !!(CFG.data && CFG.data.password_set), hasKey = !!getKey();
@@ -1099,6 +1132,8 @@ function initPay(banks){
     toast(r.ok ? `Лист надіслано на ${r.data.to}. Посилання діє ${r.data.ttl_minutes} хв.` : (r.data.error || 'Не вдалося надіслати лист'), r.ok ? 9000 : 6000);
   });
   $('adminOff').addEventListener('click', () => { ADMIN.on = false; try { localStorage.removeItem(LS_ADMIN); } catch(e){} renderAdmin(); });
+  $('show-phone').addEventListener('change', () => toggleContactVisibility('show_phone', $('show-phone')));
+  $('show-email').addEventListener('change', () => toggleContactVisibility('show_email', $('show-email')));
 
   // ----- Підказки (з шаблонів/реєстру) для полів «Призначення» та «Платник» -----
   const nq = s => String(s).toLowerCase().replace(/[’ʼ`]/g, "'");
