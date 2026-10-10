@@ -313,7 +313,7 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
     <div class="desktop-only">
       <div class="qr-box">
         <div class="qr-frame" role="img" aria-label="QR-код для оплати">
-          <svg id="qr-svg" viewBox="-2 -2 57 57" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><path id="qr-path" fill="#0f172a" d=""/></svg>
+          <svg id="qr-svg" viewBox="-2 -2 57 57" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><path id="qr-path" fill="#0f172a" d=""/><circle id="qr-logo-bg" fill="#ffffff"/><text id="qr-logo-char" text-anchor="middle" dominant-baseline="central" font-family="Arial, Helvetica, sans-serif" font-weight="700" fill="#0f172a">₴</text></svg>
         </div>
         <p class="qr-text">Відскануйте QR камерою / банківським додатком.</p>
         <p class="qr-amount" id="qr-amount" hidden></p>
@@ -447,6 +447,8 @@ const CONFIG = {
     mono:           {name:"Моно",           mark:"m", grad:["#1f2937","#000000"], icon:"mono", package:"com.ftband.mono", iosScheme:"mono", priority:1},
     privat:         {name:"Приват24",       mark:"П", grad:["#84cc16","#4d7c0f"], icon:"privat", package:"ua.privatbank.ap24", priority:1},
     pumb:           {name:"ПУМБ",           mark:"П", grad:["#ef4444","#b91c1c"], icon:"pumb", package:"com.fuib.android.spot.online", iosScheme:"pumb-online.app", priority:1},
+    aval:           {name:"Аваль",           mark:"А", grad:["#fde047","#ca8a04"], icon:"aval", package:"ua.raiffeisen.myraif", iosScheme:"myraif", priority:2},
+    ukrsib:         {name:"УкрСіб",          mark:"У", grad:["#22c55e","#065f46"], icon:"ukrsib", package:"com.ukrsibbank.uso.android", priority:2},
     abank:          {name:"А-Банк",         mark:"А", grad:["#f43f5e","#be123c"], icon:"abank", package:"ua.com.abank", priority:1},
     sense:          {name:"Sense",          mark:"S", grad:["#34d399","#047857"], icon:"sense", package:"ua.alfabank.mobile.android", priority:1},
     ukrgaz:         {name:"Укргазбанк",     mark:"У", grad:["#38bdf8","#0369a1"], icon:"ukrgaz", package:"com.ugb.app", priority:2},
@@ -455,9 +457,7 @@ const CONFIG = {
     globus:         {name:"Глобус",         mark:"Г", grad:["#fbbf24","#b45309"], icon:"globus", package:"com.t18.bone.personal.globus", priority:2},
     vostok:         {name:"Восток",         mark:"В", grad:["#fb923c","#c2410c"], icon:"vostok", package:"com.vostok.bv", iosScheme:"vostok", priority:2},
     creditagricole: {name:"Креді Агріколь", mark:"К", grad:["#2dd4bf","#0f766e"], icon:"credi", package:"ua.creditagricole.mobile.app", priority:2},
-    creditdnepr:    {name:"Кредит Дніпро",  mark:"К", grad:["#60a5fa","#1d4ed8"], icon:"credit-dnipro", package:"com.creditdnepr.mb", priority:2},
-    aval:           {name:"Аваль",           mark:"А", grad:["#fde047","#ca8a04"], icon:"aval", package:"ua.raiffeisen.myraif", priority:2},
-    ukrsib:         {name:"УкрСіб",          mark:"У", grad:["#22c55e","#065f46"], icon:"ukrsib", package:"com.ukrsibbank.uso.android", priority:2}
+    creditdnepr:    {name:"Кредит Дніпро",  mark:"К", grad:["#60a5fa","#1d4ed8"], icon:"credit-dnipro", package:"com.creditdnepr.mb", priority:2}
   }
 };
 
@@ -533,7 +533,9 @@ function buildPay(amountStr, purposeRaw){
   return { amt, purpose, path: 'bank.gov.ua/qr/' + toBase64Url(enc.bytes), dropped };
 }
 function makeQr(url){
-  for (const ec of ['M', 'L']){
+  // Постанова НБУ №97 від 19.08.2025 (чинна з 01.11.2025): для QR форматів 002/003
+  // з обов'язковим логотипом ₴ дозволені лише рівні корекції M або Q (рівень L заборонено).
+  for (const ec of ['M', 'Q']){
     const q = qrcode(0, ec); q.addData(url, 'Byte'); q.make();
     if (q.getModuleCount() <= MAX_QR_MODULES) return q;
   }
@@ -922,7 +924,7 @@ function download(name, mime, content){
 function initPay(banks){
   const $ = id => document.getElementById(id);
   const amountEl = $('amount'), purposeEl = $('purpose'), warnEl = $('pay-warn');
-  const svg = $('qr-svg'), qrPath = $('qr-path');
+  const svg = $('qr-svg'), qrPath = $('qr-path'), logoBg = $('qr-logo-bg'), logoChar = $('qr-logo-char');
   let awaiting = false;               // чекаємо links.json, щоб не затирати ?код в адресному рядку
 
   function drawQr(q){
@@ -935,6 +937,14 @@ function initPay(banks){
       }
     }
     svg.setAttribute('viewBox', `-2 -2 ${n + 4} ${n + 4}`); qrPath.setAttribute('d', d);
+    // Обов'язковий логотип ₴ у білому колі в центрі (постанова НБУ №97 від 19.08.2025, формати 002/003).
+    // Офіційна таблиця розмірів (Додаток 1) не публікувалась у відкритих джерелах, що вдалось знайти;
+    // діаметр кола ≈ 0.3× кількості модулів — за цією ж пропорцією побудовані відомі сторонні реалізації
+    // (перевірено: лишається в межах запасу корекції M/Q і не зачіпає службові зони/рамки пошуку).
+    const cx = n / 2, cy = n / 2, r = n * 0.15;
+    logoBg.setAttribute('cx', cx); logoBg.setAttribute('cy', cy); logoBg.setAttribute('r', r);
+    logoChar.setAttribute('x', cx); logoChar.setAttribute('y', cy);
+    logoChar.setAttribute('font-size', (r * 1.5).toFixed(2));
     const frame = svg.parentElement;   // щільніший код — трохи більша рамка, щоб модулі лишались читабельними
     frame.style.width = Math.min(430, Math.max(290, Math.round((n + 4) * 4.6 + 32))) + 'px'; frame.style.maxWidth = '100%';
   }

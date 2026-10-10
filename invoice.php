@@ -191,6 +191,19 @@ class InvPdf {
     public function line(float $x1, float $y1, float $x2, float $y2, array $rgb, float $lw = 0.6): void {
         $this->ops[] = sprintf('%.3F %.3F %.3F RG %.2F w %.2F %.2F m %.2F %.2F l S', $rgb[0], $rgb[1], $rgb[2], $lw, $x1, self::H - $y1, $x2, self::H - $y2);
     }
+    public function circle(float $cx, float $cy, float $r, ?array $fill, ?array $stroke = null, float $lw = 0.6): void {
+        $k = 0.5523 * $r; $yy = self::H - $cy; $o = '';
+        if ($fill)   $o .= sprintf('%.3F %.3F %.3F rg ', $fill[0], $fill[1], $fill[2]);
+        if ($stroke) $o .= sprintf('%.3F %.3F %.3F RG %.2F w ', $stroke[0], $stroke[1], $stroke[2], $lw);
+        $o .= sprintf('%.2F %.2F m %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c h ',
+            $cx + $r, $yy,
+            $cx + $r, $yy + $k, $cx + $k, $yy + $r, $cx, $yy + $r,
+            $cx - $k, $yy + $r, $cx - $r, $yy + $k, $cx - $r, $yy,
+            $cx - $r, $yy - $k, $cx - $k, $yy - $r, $cx, $yy - $r,
+            $cx + $k, $yy - $r, $cx + $r, $yy - $k, $cx + $r, $yy);
+        $o .= $fill && $stroke ? 'B' : ($fill ? 'f' : 'S');
+        $this->ops[] = $o;
+    }
     public function logo(float $x, float $y, float $size): void {
         if ($this->logo !== null) $this->ops[] = sprintf('q %.2F 0 0 %.2F %.2F %.2F cm /Im1 Do Q', $size, $size, $x, self::H - $y - $size);
     }
@@ -208,6 +221,21 @@ class InvPdf {
             }
         }
         if ($path !== '') $this->ops[] = sprintf('%.3F %.3F %.3F rg %sf', $rgb[0], $rgb[1], $rgb[2], $path);
+        // Обов'язковий логотип ₴ у білому колі в центрі (постанова НБУ №97 від 19.08.2025, формати 002/003).
+        // Діаметр ≈ 0.3× кількості модулів — та сама пропорція, що й у клієнтському QR на сторінці (index.html);
+        // при рівні корекції M/Q (а не L) це лишається в межах запасу надлишковості.
+        $cx = $x + $size / 2; $cy = $y + $size / 2; $r = 0.15 * $n * $cell;
+        $this->circle($cx, $cy, $r, [1, 1, 1]);
+        $u = 8372; // ₴ U+20B4
+        $gidF = 'F2';
+        $gid = $this->gid($gidF, $u);
+        $fs = $r * 1.6;
+        $hex = sprintf('%04X', $gid);
+        $tw = $this->fonts[$gidF]['w'][$gid] * $fs / 1000;
+        // візуальне центрування гліфа по капхайту шрифту, а не по базовій лінії
+        $capRatio = $this->fonts[$gidF]['cap'] / 1000;
+        $ty = $cy + ($fs * $capRatio) / 2;
+        $this->ops[] = sprintf('BT /%s %.2F Tf %.3F %.3F %.3F rg %.2F %.2F Td <%s> Tj ET', $gidF, $fs, $rgb[0], $rgb[1], $rgb[2], $cx - $tw / 2, self::H - $ty, $hex);
     }
 
     private static function stream(string $dict, string $data, bool $flate = true): string {
