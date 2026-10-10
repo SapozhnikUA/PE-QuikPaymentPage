@@ -177,6 +177,11 @@ body.android .bank-links{grid-template-columns:repeat(5,1fr)}
 .admin .p-actions{flex-wrap:wrap}
 .admin .btn{padding:10px 12px;font-size:13px}
 .admin p{font-size:12.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
+.update-banner{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+  margin:0 0 10px;padding:10px 12px;border:1px solid rgba(245,158,11,.4);border-radius:12px;background:rgba(245,158,11,.1)}
+.update-banner span{font-size:12.5px;line-height:1.4;color:#b45309}
+:root[data-theme="dark"] .update-banner span{color:#fbbf24}
+.update-banner .btn{padding:8px 14px;font-size:12.5px;flex:0 0 auto}
 body.loading-link .qr-frame,body.loading-link .bank-links{opacity:.35;transition:opacity .2s}
 .btn.accent{border-color:transparent;color:#fff;background:linear-gradient(135deg,#4f46e5,#7c3aed 60%,#06b6d4);box-shadow:0 12px 24px -14px rgba(79,70,229,.9)}
 .btn.accent:hover{color:#fff;border-color:transparent;transform:translateY(-2px)}
@@ -285,6 +290,10 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       </div>
       <div class="admin" id="admin-box" hidden>
         <div class="admin-head"><b>Режим адміністратора</b><span><button type="button" class="link-btn" id="keyBtn"></button> · <button type="button" class="link-btn" id="adminOff">вимкнути</button></span></div>
+        <div class="update-banner" id="update-banner" hidden>
+          <span id="update-text"></span>
+          <button type="button" class="btn accent" id="updateBtn">Оновити</button>
+        </div>
         <p id="admin-info"></p>
         <div class="field"><label for="inv-payer">Платник <span class="opt">(необов'язково)</span></label>
           <div class="input"><input id="inv-payer" type="text" autocomplete="off" maxlength="140" placeholder="Наприклад: ФОП Іванов І.І." role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="payer-list">
@@ -395,7 +404,7 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
   </section>
 
   <p class="foot" id="cfg-loading">Завантаження реквізитів…</p>
-  <p class="foot">© <span id="yr"></span> <span id="p-foot"></span></p>
+  <p class="foot">© <span id="yr"></span> <span id="p-foot"></span> <span id="app-version"></span></p>
 </div>
 
 <dialog id="pw-dialog" aria-labelledby="pw-title">
@@ -472,6 +481,7 @@ function detectPlatform(){
 // ---------- Платіжний QR за стандартом НБУ (формат 002, кодування Win-1251) ----------
 let PAYEE = { name: '', iban: '', taxId: '' };          // заповнюється з config.php
 let DEFAULT_PURPOSE = 'Оплата за послуги';         // перезаписується з config.php
+let APP_VERSION = '';                              // поточна версія сторінки, з config.php (файл VERSION у репозиторії)
 const MAX_PURPOSE = 140;          // ліміт стандарту (символів)
 const MAX_QR_MODULES = 77;        // версія 15 — максимум для формату 002
 const CP1251_HI = '\u0402\u0403\u201A\u0453\u201E\u2026\u2020\u2021\u20AC\u2030\u0409\u2039\u040A\u040C\u040B\u040F\u0452\u2018\u2019\u201C\u201D\u2022\u2013\u2014\uFFFD\u2122\u0459\u203A\u045A\u045C\u045B\u045F\u00A0\u040E\u045E\u0408\u00A4\u0490\u00A6\u00A7\u0401\u00A9\u0404\u00AB\u00AC\u00AD\u00AE\u0407\u00B0\u00B1\u0406\u0456\u0491\u00B5\u00B6\u00B7\u0451\u2116\u0454\u00BB\u0458\u0405\u0455\u0457\u0410\u0411\u0412\u0413\u0414\u0415\u0416\u0417\u0418\u0419\u041A\u041B\u041C\u041D\u041E\u041F\u0420\u0421\u0422\u0423\u0424\u0425\u0426\u0427\u0428\u0429\u042A\u042B\u042C\u042D\u042E\u042F\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043A\u043B\u043C\u043D\u043E\u043F\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044A\u044B\u044C\u044D\u044E\u044F';           // символи 0x80…0xFF таблиці windows-1251
@@ -654,6 +664,7 @@ async function api(action, body, { auth = false, method = 'POST', timeout = 1000
   } finally { clearTimeout(tm); }
 }
 let INV = null;                                            // стан реєстру рахунків {count, next} — лише коли є ключ
+const UPDATE = { checked: false, busy: false, latest: null, available: false };
 async function apiBlob(action, body){                       // відповідь-файл (PDF/CSV); помилки приходять як JSON
   const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 25000);
   try {
@@ -689,6 +700,7 @@ function applyConfig(d){
   set('account-id', p.name); set('iban', PAYEE.iban); set('tax-id', p.tax_id); set('bank', p.bank); set('mfo', p.mfo);
   set('bank-code', p.bank_edrpou); set('phone', p.phone); set('email', p.email);
   set('p-name', pr.name); set('p-sub', pr.subtitle); set('p-badge', pr.badge); set('p-foot', pr.footer);
+  if (d.version) { APP_VERSION = d.version; set('app-version', '· v' + d.version); }
   if (pr.logo_alt) $('p-logo').alt = pr.logo_alt;
   if (pg.title) document.title = pg.title;
   const md = document.querySelector('meta[name=description]'); if (md && pg.description) md.content = pg.description;
@@ -1005,6 +1017,37 @@ function initPay(banks){
     $('annulBtn').hidden = !pwSet;
     $('clearPending').hidden = !pen;
     renderLinksSelect();
+    if (hasKey && !UPDATE.checked){ UPDATE.checked = true; checkForUpdate(); }
+    renderUpdateBanner();
+  }
+  function renderUpdateBanner(){
+    const banner = $('update-banner'), text = $('update-text'), btn = $('updateBtn');
+    if (!UPDATE.available){ banner.hidden = true; return; }
+    banner.hidden = false;
+    text.textContent = UPDATE.busy ? 'Оновлення встановлюється…'
+      : `Доступне оновлення: v${UPDATE.latest} (поточна v${APP_VERSION || '?'})`;
+    btn.disabled = UPDATE.busy;
+    btn.textContent = UPDATE.busy ? 'Зачекайте…' : 'Оновити';
+  }
+  async function checkForUpdate(){
+    if (!getKey()) return;
+    let r; try { r = await api('check_update', {}, { auth: true, timeout: 10000 }); } catch(e){ return; }
+    if (!r.ok || !r.data || !r.data.ok) return;              // мовчки ігноруємо — немає з’єднання з GitHub чи інша тимчасова проблема
+    UPDATE.latest = r.data.latest; UPDATE.available = !!r.data.updateAvailable;
+    renderUpdateBanner();
+  }
+  async function runUpdate(){
+    if (!getKey() || UPDATE.busy) return;
+    UPDATE.busy = true; renderUpdateBanner();
+    let r; try { r = await api('update', {}, { auth: true, timeout: 60000 }); }
+    catch(e){ UPDATE.busy = false; renderUpdateBanner(); return toast('Немає зв’язку зі save.php', 5000); }
+    UPDATE.busy = false;
+    if (!r.ok || !r.data || !r.data.ok){
+      renderUpdateBanner();
+      return toast((r.data && r.data.error) || 'Не вдалося оновити сторінку', 6000);
+    }
+    toast('Оновлено до v' + r.data.version + ' — перезавантаження…', 3000);
+    setTimeout(() => location.reload(), 1200);
   }
   const fmtGrn = amt => { const n = Number(amt); return (isNaN(n) ? amt : n.toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) + ' грн'; };
   function renderInvoiceSelect(){                          // спадний перелік рахунків за останні 30 днів + «Реєстр (CSV)» останнім пунктом
@@ -1146,6 +1189,10 @@ function initPay(banks){
     toast(r.ok ? `Лист надіслано на ${r.data.to}. Посилання діє ${r.data.ttl_minutes} хв.` : (r.data.error || 'Не вдалося надіслати лист'), r.ok ? 9000 : 6000);
   });
   $('adminOff').addEventListener('click', () => { ADMIN.on = false; try { localStorage.removeItem(LS_ADMIN); } catch(e){} renderAdmin(); });
+  $('updateBtn').addEventListener('click', async () => {
+    if (!confirm(`Оновити сторінку до v${UPDATE.latest}?\n\nФайли коду (index.html, save.php, invoice.php, qrcode.php) буде замінено останньою версією з GitHub. Дані (config.php, links.json, реєстр рахунків, виписка ЄДР) не зачіпаються.`)) return;
+    runUpdate();
+  });
   $('show-phone').addEventListener('change', () => toggleContactVisibility('show_phone', $('show-phone')));
   $('show-email').addEventListener('change', () => toggleContactVisibility('show_email', $('show-email')));
 

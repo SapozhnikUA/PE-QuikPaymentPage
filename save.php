@@ -16,9 +16,14 @@ declare(strict_types=1);
  *   POST ?action=invoice_get     повторно завантажити вже згенерований PDF-рахунок {number} з реєстру (потрібен ключ)
  *   POST ?action=invoices_csv    завантажити реєстр рахунків як CSV (потрібен ключ)
  *   POST ?action=visibility      {show_phone?, show_email?} → зберегти в config.php, чи показувати ці поля у звичайному режимі (потрібен ключ)
+ *   POST ?action=check_update    перевірити GitHub на новішу версію (файл VERSION у гілці main); (потрібен ключ)
+ *   POST ?action=update          завантажити останню версію з GitHub (zip-архів гілки main) і замінити файли коду на сервері;
+ *                                 дані (config.php, links.json*, invoices.csv.php, edr.pdf) не чіпаються; (потрібен ключ)
  *
  * Дані та секрети — у config.php (див. його). Вимоги: PHP 7.4+, права запису на config.php і links.json,
- * працююча функція mail() для листа «Анулювати ключ».
+ * працююча функція mail() для листа «Анулювати ключ». Для ?action=update додатково потрібні: розширення
+ * ZipArchive та доступ до зовнішніх HTTPS-запитів (curl або allow_url_fopen) — без них оновлення одним
+ * натисканням недоступне, і сторінку доведеться оновлювати вручну (git pull або заміна файлів).
  */
 
 const CONFIG_FILE        = __DIR__ . '/config.php';
@@ -42,6 +47,15 @@ const LOGIN_MAX_FAILS    = 5;
 const LOGIN_LOCK_SECONDS = 900;
 const RESET_TTL          = 3600;      // посилання зі скидання діє 1 годину
 const RESET_COOLDOWN     = 300;       // не частіше одного листа на 5 хвилин
+
+// ───────────────────────── оновлення з GitHub ─────────────────────────
+const VERSION_FILE        = __DIR__ . '/VERSION';
+const UPDATE_REPO_OWNER   = 'SapozhnikUA';
+const UPDATE_REPO_NAME    = 'PE-QuikPaymentPage';
+const UPDATE_BRANCH       = 'main';
+// Лише ці файли оновлюються (білий список — явно, а не «усе, крім даних»): код сторінки й документація.
+// Дані (config.php, links.json*, invoices.csv.php, edr.pdf) до списку свідомо НЕ входять і ніколи не чіпаються.
+const UPDATE_CODE_FILES   = ['index.html', 'save.php', 'invoice.php', 'qrcode.php', 'readme.md', 'config.example.php', 'VERSION', '.gitignore'];
 
 // ───────────────────────── відповіді ─────────────────────────
 function respond_json(int $status, array $data): void {
@@ -118,7 +132,91 @@ function public_config(array $c): array {                 // що бачить �
         'profile'         => is_array($c['profile'] ?? null) ? $c['profile'] : [],
         'page'            => is_array($c['page'] ?? null) ? $c['page'] : [],
         'password_set'    => (string)($c['password_hash'] ?? '') !== '',
+        'version'         => local_version(),
     ];
+}
+
+// ───────────────────────── версія та оновлення ─────────────────────────
+function local_version(): string {
+    $v = @file_get_contents(VERSION_FILE);
+    return $v === false ? '0.0.0' : trim($v);
+}
+/** Просте HTTP(S) GET: curl, якщо є, інакше allow_url_fopen; null — якщо жоден шлях недоступний або стався збій. */
+function http_get(string $url, int $timeout = 8): ?string {
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_USERAGENT      => 'PE-QuikPaymentPage-updater',
+        ]);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        return ($body !== false && $code >= 200 && $code < 300) ? $body : null;
+    }
+    if ((string)ini_get('allow_url_fopen') === '1') {
+        $ctx = stream_context_create(['http' => ['timeout' => $timeout, 'header' => "User-Agent: PE-QuikPaymentPage-updater\r\n"]]);
+        $body = @file_get_contents($url, false, $ctx);
+        return $body === false ? null : $body;
+    }
+    return null;                                           // немає curl і заборонено allow_url_fopen — оновлення одним натисканням недоступне
+}
+function rrmdir(string $dir): void {                        // рекурсивне видалення тимчасової теки після розпакування
+    if (!is_dir($dir)) return;
+    foreach (scandir($dir) ?: [] as $item) {
+        if ($item === '.' || $item === '..') continue;
+        $path = $dir . '/' . $item;
+        is_dir($path) ? rrmdir($path) : @unlink($path);
+    }
+    @rmdir($dir);
+}
+function action_check_update(): void {
+    $cfg = cfg_read(); require_auth($cfg);
+    $local = local_version();
+    $url = sprintf('https://raw.githubusercontent.com/%s/%s/%s/VERSION', UPDATE_REPO_OWNER, UPDATE_REPO_NAME, UPDATE_BRANCH);
+    $remote = http_get($url, 8);
+    if ($remote === null) respond_json(200, ['ok' => false, 'error' => 'Немає з’єднання з GitHub — перевірте, чи сервер має доступ до зовнішніх HTTPS-запитів (curl або allow_url_fopen)', 'local' => $local]);
+    $latest = trim($remote);
+    if ($latest === '' || strlen($latest) > 40 || !preg_match('/^[\w.\-]+$/', $latest)) respond_json(200, ['ok' => false, 'error' => 'Неочікувана відповідь від GitHub', 'local' => $local]);
+    respond_json(200, ['ok' => true, 'local' => $local, 'latest' => $latest, 'updateAvailable' => version_compare($latest, $local, '>')]);
+}
+function action_update(): void {
+    $cfg = cfg_read(); require_auth($cfg);
+    if (!class_exists('ZipArchive')) fail(500, 'На сервері відсутнє розширення ZipArchive — автоматичне оновлення тут неможливе. Оновіть вручну: git pull у теці сайту або заміна файлів коду.');
+    $zipUrl = sprintf('https://codeload.github.com/%s/%s/zip/refs/heads/%s', UPDATE_REPO_OWNER, UPDATE_REPO_NAME, UPDATE_BRANCH);
+    $zipData = http_get($zipUrl, 45);
+    if ($zipData === null || strlen($zipData) < 1000) fail(502, 'Не вдалося завантажити архів з GitHub — перевірте доступ сервера до зовнішніх HTTPS-запитів');
+
+    $tmpZip = tempnam(sys_get_temp_dir(), 'peupd_');
+    if ($tmpZip === false || file_put_contents($tmpZip, $zipData) === false) fail(500, 'Не вдалося зберегти тимчасовий файл архіву');
+    $zip = new ZipArchive();
+    if ($zip->open($tmpZip) !== true) { @unlink($tmpZip); fail(500, 'Завантажений архів пошкоджений'); }
+    $tmpDir = sys_get_temp_dir() . '/peupd_' . bin2hex(random_bytes(6));
+    if (!@mkdir($tmpDir, 0700, true)) { $zip->close(); @unlink($tmpZip); fail(500, 'Не вдалося створити тимчасову теку для розпакування'); }
+    $zip->extractTo($tmpDir);
+    $zip->close();
+    @unlink($tmpZip);
+
+    // GitHub пакує архів гілки в підтеку виду "<repo>-<branch>/"
+    $entries = glob($tmpDir . '/*', GLOB_ONLYDIR);
+    $srcDir = $entries[0] ?? null;
+    if ($srcDir === null) { rrmdir($tmpDir); fail(500, 'Архів має неочікувану структуру'); }
+
+    $copied = []; $errors = [];
+    foreach (UPDATE_CODE_FILES as $name) {                 // лише білий список — дані сюди свідомо не входять
+        $src = $srcDir . '/' . $name;
+        if (!is_file($src)) continue;                      // наприклад, .gitignore чи VERSION могли ще не існувати у старіших версіях
+        if (@copy($src, __DIR__ . '/' . $name)) $copied[] = $name; else $errors[] = $name;
+    }
+    rrmdir($tmpDir);
+    if (function_exists('opcache_reset')) @opcache_reset(); // щоб наступні запити одразу бачили нові файли, а не кешовані байткоди
+
+    if ($errors) fail(500, 'Оновлено частково; не вдалося записати: ' . implode(', ', $errors) . ' (перевірте права запису для веб-користувача)');
+    if (!$copied) fail(500, 'В архіві не знайдено жодного очікуваного файлу коду');
+    respond_json(200, ['ok' => true, 'version' => local_version(), 'files' => $copied]);
 }
 function action_set_visibility(): void {
     $cfg = cfg_read(); require_auth($cfg);
@@ -556,6 +654,8 @@ $routes = [
     'invoice_get'   => ['POST', 'action_invoice_get'],
     'invoices_csv'  => ['POST', 'action_invoices_csv'],
     'visibility'    => ['POST', 'action_set_visibility'],
+    'check_update'  => ['POST', 'action_check_update'],
+    'update'        => ['POST', 'action_update'],
 ];
 if ($action === 'reset') {
     if ($method === 'GET')  action_reset_page();
