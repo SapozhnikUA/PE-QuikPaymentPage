@@ -204,6 +204,7 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
   width:100%;display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;cursor:pointer;text-align:left;
   border:1px solid var(--border);background:var(--field);color:var(--text);font-family:inherit;transition:all .18s;text-decoration:none;
 }
+.doc-btn+.doc-btn{margin-top:10px}
 .doc-btn:hover{border-color:var(--accent);background:var(--accent-soft);transform:translateY(-1px)}
 .doc-ico{width:44px;height:44px;border-radius:13px;flex:none;display:grid;place-items:center;color:#fff;
   background:linear-gradient(135deg,#4f46e5,#7c3aed 60%,#06b6d4);box-shadow:0 10px 20px -10px rgba(79,70,229,.8)}
@@ -365,6 +366,11 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       <span class="doc-txt"><b>Виписка з ЄДР</b><small>Підтвердження реєстрації ФОП</small></span>
       <span class="doc-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg></span>
     </a>
+    <a class="doc-btn" id="taxBtn" href="tax.pdf" target="_blank" rel="noopener">
+      <span class="doc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg></span>
+      <span class="doc-txt"><b>Витяг платника податків</b><small>З реєстру платників єдиного податку</small></span>
+      <span class="doc-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg></span>
+    </a>
   </section>
 
   <!-- Додатково -->
@@ -456,10 +462,10 @@ const CONFIG = {
     mono:           {name:"Моно",           mark:"m", grad:["#1f2937","#000000"], icon:"mono", package:"com.ftband.mono", iosScheme:"mono", priority:1},
     privat:         {name:"Приват24",       mark:"П", grad:["#84cc16","#4d7c0f"], icon:"privat", package:"ua.privatbank.ap24", priority:1},
     pumb:           {name:"ПУМБ",           mark:"П", grad:["#ef4444","#b91c1c"], icon:"pumb", package:"com.fuib.android.spot.online", iosScheme:"pumb-online.app", priority:1},
-    aval:           {name:"Аваль",           mark:"А", grad:["#fde047","#ca8a04"], icon:"aval", package:"ua.raiffeisen.myraif", iosScheme:"myraif", priority:2},
-    ukrsib:         {name:"УкрСіб",          mark:"У", grad:["#22c55e","#065f46"], icon:"ukrsib", package:"com.ukrsibbank.uso.android", priority:2},
-    abank:          {name:"А-Банк",         mark:"А", grad:["#f43f5e","#be123c"], icon:"abank", package:"ua.com.abank", priority:1},
-    sense:          {name:"Sense",          mark:"S", grad:["#34d399","#047857"], icon:"sense", package:"ua.alfabank.mobile.android", priority:1},
+    aval:           {name:"Аваль",           mark:"А", grad:["#fde047","#ca8a04"], icon:"aval", package:"ua.raiffeisen.myraif", iosScheme:"myraif", priority:1},
+    ukrsib:         {name:"УкрСіб",          mark:"У", grad:["#22c55e","#065f46"], icon:"ukrsib", package:"com.ukrsibbank.uso.android", priority:1},
+    abank:          {name:"А-Банк",         mark:"А", grad:["#f43f5e","#be123c"], icon:"abank", package:"ua.com.abank", priority:2},
+    sense:          {name:"Sense",          mark:"S", grad:["#34d399","#047857"], icon:"sense", package:"ua.alfabank.mobile.android", priority:2},
     ukrgaz:         {name:"Укргазбанк",     mark:"У", grad:["#38bdf8","#0369a1"], icon:"ukrgaz", package:"com.ugb.app", priority:2},
     izibank:        {name:"IziBank",        mark:"i", grad:["#a78bfa","#6d28d9"], icon:"izi", wide:true, package:"ua.izibank.app", priority:2},
     otp:            {name:"ОТП",            mark:"О", grad:["#4ade80","#15803d"], icon:"otp", package:"ua.otpbank.android", iosScheme:"otpbankua", priority:2},
