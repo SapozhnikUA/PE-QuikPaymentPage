@@ -215,6 +215,8 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
 .doc-arrow{color:var(--muted);flex:none;display:grid;place-items:center}
 .doc-arrow svg{width:18px;height:18px}
 .doc-btn:hover .doc-arrow{color:var(--accent)}
+.doc-upd{margin:-4px 0 10px 2px}
+.doc-upd .link-btn[disabled]{opacity:.55;cursor:default;text-decoration:none}
 .foot{text-align:center;color:var(--muted);font-size:12.5px;margin-top:22px}
 .toast{
   position:fixed;left:50%;bottom:calc(26px + env(safe-area-inset-bottom,0px));transform:translate(-50%,30px);
@@ -234,7 +236,7 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
 }
 @media print{
   body{background:#fff;color:#000;padding:0}
-  .blob,.topbar,.actions,.copy-button,.toast,.pay-btn,.bank-links,.hint,.qr-link,.doc-btn,.p-actions,.admin,.suggest,dialog{display:none!important}
+  .blob,.topbar,.actions,.copy-button,.toast,.pay-btn,.bank-links,.hint,.qr-link,.doc-btn,.doc-upd,.p-actions,.admin,.suggest,dialog{display:none!important}
   .card{box-shadow:none;backdrop-filter:none;background:#fff;border:1px solid #ccc}
   .input input{background:#fff;border-color:#ccc;-webkit-text-fill-color:#000}
   .android-only,.ios-only{display:none!important}
@@ -366,11 +368,14 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
       <span class="doc-txt"><b>Виписка з ЄДР</b><small>Підтвердження реєстрації ФОП</small></span>
       <span class="doc-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg></span>
     </a>
+    <div class="doc-upd" id="edrUpdWrap" hidden><button type="button" class="link-btn" id="edrUpdBtn">Виписка з ЄДР (оновити)</button></div>
     <a class="doc-btn" id="taxBtn" href="tax.pdf" target="_blank" rel="noopener">
       <span class="doc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg></span>
       <span class="doc-txt"><b>Витяг платника податків</b><small>З реєстру платників єдиного податку</small></span>
       <span class="doc-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg></span>
     </a>
+    <div class="doc-upd" id="taxUpdWrap" hidden><button type="button" class="link-btn" id="taxUpdBtn">Витяг платника податків (оновити)</button></div>
+    <input type="file" id="docUpdInput" accept="application/pdf,.pdf" hidden>
   </section>
 
   <!-- Додатково -->
@@ -1005,6 +1010,7 @@ function initPay(banks){
   }
   function renderAdmin(){
     applyContactVisibility();
+    const eu = $('edrUpdWrap'), tu = $('taxUpdWrap'); if (eu) eu.hidden = !ADMIN.on; if (tu) tu.hidden = !ADMIN.on;
     const box = $('admin-box'); box.hidden = !ADMIN.on; if (!ADMIN.on) return;
     const pub = Object.keys(STORE.links).length, pen = Object.keys(STORE.pending).length, st = curState(), k = keyOf(st);
     const pwSet = !!(CFG.data && CFG.data.password_set), hasKey = !!getKey();
@@ -1201,6 +1207,50 @@ function initPay(banks){
   });
   $('show-phone').addEventListener('change', () => toggleContactVisibility('show_phone', $('show-phone')));
   $('show-email').addEventListener('change', () => toggleContactVisibility('show_email', $('show-email')));
+
+  // ----- Адмін: заміна edr.pdf / tax.pdf прямо з браузера -----
+  let docUpdTarget = null;                                  // 'edr' | 'tax' — на що чекаємо вибір файлу
+  const DOC_UPD = {
+    edr: { btn: 'edrUpdBtn', link: 'edrBtn', label: 'Виписка з ЄДР', file: 'edr.pdf' },
+    tax: { btn: 'taxUpdBtn', link: 'taxBtn', label: 'Витяг платника податків', file: 'tax.pdf' }
+  };
+  function startDocUpdate(which){
+    if (!getKey()){ toast('Спершу введіть пароль', 4000); return; }
+    docUpdTarget = which;
+    $('docUpdInput').value = '';
+    $('docUpdInput').click();
+  }
+  $('edrUpdBtn').addEventListener('click', () => startDocUpdate('edr'));
+  $('taxUpdBtn').addEventListener('click', () => startDocUpdate('tax'));
+  $('docUpdInput').addEventListener('change', async () => {
+    const which = docUpdTarget, d = which && DOC_UPD[which];
+    const input = $('docUpdInput'), file = input.files && input.files[0];
+    docUpdTarget = null;
+    if (!d || !file) return;
+    if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast('Потрібен файл PDF', 4000); return; }
+    const btn = $(d.btn), was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Завантаження…';
+    try {
+      const fd = new FormData(); fd.append('file', file, file.name);
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 30000);
+      let res;
+      try {
+        res = await fetch(siteUrl(SAVE_URL) + '?action=upload_doc&which=' + which, { method: 'POST', headers: { 'X-Key': getKey() }, body: fd, cache: 'no-store', signal: ctl.signal });
+      } finally { clearTimeout(tm); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok){
+        if (res.status === 403){ forgetKey(); renderAdmin(); }
+        toast(data.error || 'Не вдалося завантажити файл', 6000);
+        return;
+      }
+      const link = $(d.link); if (link) link.href = d.file + '?v=' + Date.now();
+      toast(`«${d.label}» оновлено ✓`, 3500);
+    } catch(e){
+      toast('Немає зв’язку зі save.php', 5000);
+    } finally {
+      btn.disabled = false; btn.textContent = was;
+    }
+  });
 
   // ----- Підказки (з шаблонів/реєстру) для полів «Призначення» та «Платник» -----
   const nq = s => String(s).toLowerCase().replace(/[’ʼ`]/g, "'");

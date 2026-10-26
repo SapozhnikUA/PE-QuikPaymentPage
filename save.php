@@ -16,6 +16,7 @@ declare(strict_types=1);
  *   POST ?action=invoice_get     повторно завантажити вже згенерований PDF-рахунок {number} з реєстру (потрібен ключ)
  *   POST ?action=invoices_csv    завантажити реєстр рахунків як CSV (потрібен ключ)
  *   POST ?action=visibility      {show_phone?, show_email?} → зберегти в config.php, чи показувати ці поля у звичайному режимі (потрібен ключ)
+ *   POST ?action=upload_doc      ?which=edr|tax, multipart/form-data, поле «file» → замінити edr.pdf/tax.pdf на сервері (потрібен ключ)
  *   POST ?action=check_update    перевірити GitHub на новішу версію (файл VERSION у гілці main); (потрібен ключ)
  *   POST ?action=update          завантажити останню версію з GitHub (zip-архів гілки main) і замінити файли коду на сервері;
  *                                 дані (config.php, links.json*, invoices.csv.php, edr.pdf) не чіпаються; (потрібен ключ)
@@ -35,6 +36,8 @@ const INVOICE_RECENT_MAX  = 300;   // запобіжник розміру від
 const NOTE_MAX_LEN        = 300;
 const PAYER_MAX_LEN       = 140;   // як і призначення — стільки вміщується в один рядок реквізитів PDF без переносу проблем
 const PAYERS_SUGGEST_MAX  = 200;   // скільки останніх унікальних платників пропонувати для автопідстановки
+const MAX_DOC_SIZE        = 10 * 1024 * 1024;   // макс. розмір PDF для ?action=upload_doc (edr.pdf / tax.pdf)
+const UPLOAD_DOCS         = ['edr' => 'edr.pdf', 'tax' => 'tax.pdf'];   // білий список цілей — лише ці два файли можна замінити
 const CONFIG_GUARD       = "<?php http_response_code(404); exit; ?>\n";   // перший рядок config.php: у браузері файл «порожній»
 const MAX_LINKS          = 5000;
 const CODE_LEN           = 6;
@@ -234,6 +237,26 @@ function action_set_visibility(): void {
         return $cfg;
     });
     respond_json(200, ['ok' => true, 'show_phone' => $saved['show_phone'] ?? true, 'show_email' => $saved['show_email'] ?? true]);
+}
+
+function action_upload_doc(): void {
+    $cfg = cfg_read(); require_auth($cfg);
+    $which = (string)($_GET['which'] ?? '');
+    if (!isset(UPLOAD_DOCS[$which])) fail(400, 'Невідомий документ — очікується which=edr або which=tax');
+    $f = $_FILES['file'] ?? null;
+    if (!is_array($f) || !isset($f['error'])) fail(400, 'Файл не надіслано (поле «file»)');
+    if ((int)$f['error'] !== UPLOAD_ERR_OK) fail(400, 'Помилка завантаження файлу (код ' . (int)$f['error'] . ')');
+    $size = (int)($f['size'] ?? 0);
+    if ($size <= 0) fail(400, 'Порожній файл');
+    if ($size > MAX_DOC_SIZE) fail(400, 'Файл завеликий (макс. ' . (int)(MAX_DOC_SIZE / 1024 / 1024) . ' МБ)');
+    $tmp = (string)($f['tmp_name'] ?? '');
+    if ($tmp === '' || !is_uploaded_file($tmp)) fail(400, 'Некоректне завантаження файлу');
+    if (@file_get_contents($tmp, false, null, 0, 5) !== '%PDF-') fail(400, 'Файл не є PDF (очікується сигнатура %PDF-)');
+    $dest = __DIR__ . '/' . UPLOAD_DOCS[$which];
+    @copy($dest, $dest . '.bak');                            // резервна копія попередньої версії (якщо тека дозволяє запис)
+    if (!@move_uploaded_file($tmp, $dest)) fail(500, 'Не вдалося зберегти файл на сервері (перевірте права запису)');
+    @chmod($dest, 0644);
+    respond_json(200, ['ok' => true, 'file' => UPLOAD_DOCS[$which], 'size' => $size]);
 }
 
 function admin_email(array $c): string {
@@ -654,6 +677,7 @@ $routes = [
     'invoice_get'   => ['POST', 'action_invoice_get'],
     'invoices_csv'  => ['POST', 'action_invoices_csv'],
     'visibility'    => ['POST', 'action_set_visibility'],
+    'upload_doc'    => ['POST', 'action_upload_doc'],
     'check_update'  => ['POST', 'action_check_update'],
     'update'        => ['POST', 'action_update'],
 ];
