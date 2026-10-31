@@ -176,7 +176,9 @@ body.android .bank-links{grid-template-columns:repeat(5,1fr)}
 .link-btn:hover{color:var(--accent)}
 .admin .p-actions{flex-wrap:wrap}
 .admin .btn{padding:10px 12px;font-size:13px}
-.admin p{font-size:12.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
+.admin-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:3px 16px;
+  font-size:12.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
+.admin-info>div{min-width:0}
 .update-banner{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
   margin:0 0 10px;padding:10px 12px;border:1px solid rgba(245,158,11,.4);border-radius:12px;background:rgba(245,158,11,.1)}
 .update-banner span{font-size:12.5px;line-height:1.4;color:#b45309}
@@ -297,7 +299,7 @@ dialog p#pw-text{font-size:13.5px;color:var(--muted);margin-bottom:16px;line-hei
           <span id="update-text"></span>
           <button type="button" class="btn accent" id="updateBtn">Оновити</button>
         </div>
-        <p id="admin-info"></p>
+        <div class="admin-info" id="admin-info"></div>
         <div class="field"><label for="inv-payer">Платник <span class="opt">(необов'язково)</span></label>
           <div class="input"><input id="inv-payer" type="text" autocomplete="off" maxlength="140" placeholder="Наприклад: ФОП Іванов І.І." role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="payer-list">
             <ul class="suggest" id="payer-list" role="listbox" aria-label="Платники" hidden></ul></div></div>
@@ -1014,17 +1016,19 @@ function initPay(banks){
     const box = $('admin-box'); box.hidden = !ADMIN.on; if (!ADMIN.on) return;
     const pub = Object.keys(STORE.links).length, pen = Object.keys(STORE.pending).length, st = curState(), k = keyOf(st);
     const pwSet = !!(CFG.data && CFG.data.password_set), hasKey = !!getKey();
-    let info;
-    if (!STORE.loaded) info = 'links.json не прочитано (відкрийте сторінку через сайт, а не як файл) — скорочення не створюються.';
+    const lines = [];
+    if (!STORE.loaded) lines.push('links.json не прочитано (відкрийте сторінку через сайт, а не як файл) — скорочення не створюються.');
     else {
-      info = `У links.json: ${pub} · нових, ще не опублікованих: ${pen}. Автозбереження: ${hasKey ? 'увімкнено ✓' : (pwSet ? 'вимкнено — введіть пароль.' : 'вимкнено — пароль ще не задано.')}`;
-      if (hasKey && INV) info += ` Рахунків: ${INV.count} · наступний № ${INV.next}.`;
+      lines.push(`У links.json: ${pub} · нових, ще не опубліковано: ${pen}`);
+      lines.push(`Автозбереження: ${hasKey ? 'увімкнено ✓' : (pwSet ? 'вимкнено — введіть пароль' : 'вимкнено — пароль ще не задано')}`);
+      if (hasKey && INV) lines.push(`Рахунків: ${INV.count} · наступний № ${INV.next}`);
       if (!isDefaultState(st)){
-        if (STORE.pub.has(k)) info += ` Поточний платіж: ?${STORE.pub.get(k)} — опубліковано ✓`;
-        else if (STORE.pen.has(k)) info += ` Поточний платіж: ?${STORE.pen.get(k)} — ще не в links.json ⏳`;
+        if (STORE.pub.has(k)) lines.push(`Поточний платіж: ?${STORE.pub.get(k)} — опубліковано ✓`);
+        else if (STORE.pen.has(k)) lines.push(`Поточний платіж: ?${STORE.pen.get(k)} — ще не в links.json ⏳`);
       }
     }
-    $('admin-info').textContent = info;
+    const infoEl = $('admin-info'); infoEl.textContent = '';
+    for (const line of lines){ const d = document.createElement('div'); d.textContent = line; infoEl.appendChild(d); }
     $('keyBtn').textContent = hasKey ? 'забути ключ в браузері' : (pwSet ? 'ввести пароль' : 'задати пароль');
     $('annulBtn').hidden = !pwSet;
     $('clearPending').hidden = !pen;
